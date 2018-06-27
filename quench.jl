@@ -3,6 +3,7 @@ using Combinatorics
 using Optim
 using JSON
 using ArgParse
+using DataStructures
 
 densitybondtypes = [
     [(1,0), (0,1), (-1,1)]
@@ -91,6 +92,7 @@ function dopedsystem(n1 ::Integer, n2 ::Integer, nparticle ::Integer)
     return DopedSystem((n1, n2), densityhamiltonians, spinhamiltonians)
 end
 
+
 """
 FrozenDopedSystem with the locations built in
 """
@@ -104,15 +106,15 @@ end
 function freezelocation(ds ::DopedSystem, loc::Vector{Int})
     n_ptl = length(loc)
     convertmatrix = sparse(loc, 1:n_ptl, ones(n_ptl), length(ds), n_ptl)
-    densityenergies = Int[sum(h) for h in densityhamiltonians]
-    spinhamiltonians = [transpose(convertmatrix) * h * convertmatrix for h in densityhamiltonians]
-    return FrozenDopedSystem(size, densityenergies, spinhamiltonians)
+    densityenergies = Int[sum(h) for h in ds.densityhamiltonians]
+    spinhamiltonians = [transpose(convertmatrix) * h * convertmatrix for h in ds.spinhamiltonians]
+    return FrozenDopedSystem(ds.size, densityenergies, spinhamiltonians)
 end
 
 
 """
     loc2vec
- 
+
 # Arguments
 - ds: System
 - loc ::Vector{Int} : locations of the iron ions [i1, i2, i3, ..., iN]
@@ -216,16 +218,20 @@ end
 
 function main()
     args = parse_commandline()
-    @show args
 
     J1J2J3s = Tuple{Float64, Float64, Float64}[]
     parameters = JSON.parsefile(args["jsoninputfile"])
 
-    n1 = parameters["n1"]
-    n2 = parameters["n2"]
-    nptl = parameters["nptl"]
+    ## type can be "local" or "global"
+    sweeps = [(s["count"], s["temperature"], s["type"]) ::Tuple{Int, Float64, String} for s in parameters["sweeps"]]
+
+    size = parameters["size"]
+    n1, n2 = size[1], size[2]
     nsite = n1 * n2
-    #nptl = div(nsite, 4)
+
+    nptl = parameters["num_particles"]
+
+    printevery = parameters["print_every"]
 
     ds = dopedsystem(n1, n2, nptl)
 
@@ -244,10 +250,12 @@ function main()
         x_proposal[sel[1:nptl]] = true
     end
 
+    output_data = []
+
     for tp in parameters["tuning_parameters"]
-        V ::Vector = tp["V"]
-        J ::Vector = tp["J"]
-        println("$(V)\t$(J)")
+        V ::Vector{Float64} = tp["V"]
+        J ::Vector{Float64} = tp["J"]
+        println("V: $(V) \tJ: $(J)")
 
         f(occvec ::Vector{Bool}) = minimumenergy(ds, V, J, occvec)
 
@@ -255,55 +263,72 @@ function main()
         best = zeros(Bool, nsite)
         next = zeros(Bool, nsite)
 
+        srand(parameters["seed"])
         let
             sel = randperm(nsite)
             current[sel[1:nptl]] = true
         end
 
         f_current = f(current)
-
         f_best = f_current
         copy!(best, current)
 
         last_update = 0
-        for iter in 1:10000000
-            if iter % 100 == 0
-                globalupdate!(next, current)
+        sweepiter = 0
+        sweeptotal = sum(sweepcount for (sweepcount, _2, _3) in sweeps)
+
+        for (sweepcount, sweeptemperature, sweeptype) in sweeps
+            β = 1.0 / sweeptemperature
+            update! = if sweeptype == "local"
+                localupdate!
+            elseif sweeptype == "global"
+                globalupdate!
             else
-                localupdate!(next, current)
+                @assert(false)
             end
 
-            f_next = f(next)
-            if f_next < f_current
-                f_current = f_next
-                copy!(current, next)
-                last_update = iter
-            else
-                β = iter * 1E-5
-                prob = exp(- β * (f_next - f_current))
-                if rand() < prob
+            for iter in 1:sweepcount
+                sweepiter += 1
+                update!(next, current)
+
+                f_next = f(next)
+                if f_next < f_current
                     f_current = f_next
                     copy!(current, next)
-                    last_update = iter
+                else
+                    prob = exp(- β * (f_next - f_current))
+                    if rand() < prob
+                        f_current = f_next
+                        copy!(current, next)
+                    end
                 end
-            end
 
-            if f_current < f_best
-                f_best = f_current
-                copy!(best, current)
-            end
+                if f_current < f_best
+                    last_update = sweepiter
+                    f_best = f_current
+                    copy!(best, current)
+                end
 
-            iter % 1000 == 0 && println("$(iter)\t$(f_current)")
-
-            if iter - last_update > 20000
-                break
+                if printevery > 0 && sweepiter % printevery == 0
+                    print("\rIter: $(sweepiter)/$(sweeptotal) \tCurrent: $(f_current) \tBest: $(f_best) @ $(last_update)")
+                end
+                #if iter - last_update > 20000
+                #    break
+                #end
             end
         end
-        @show f_best
+        println("\rIter: $(sweeptotal)/$(sweeptotal) \tCurrent: $(f_current) \tBest: $(f_best) @ $(last_update)")
 
-        loc = sort(map(i -> ind2sub((n1, n2), i), i for (i,x) in enumerate(best) if x) )
-        open(args["out"], "a") do file
-            println(file, "$(J1)\t$(J2)\t$(J3)\t$(f_best)\t$(JSON.json(loc))")
+        bestloc = sort(map(i -> ind2sub((n1, n2), i), i for (i,x) in enumerate(best) if x) )
+
+        let
+            p = OrderedDict(tp...)
+            p["locations"] = bestloc
+            push!(output_data, p)
+
+            open(args["out"], "w") do file
+                JSON.print(file, output_data)
+            end
         end
     end
 end
