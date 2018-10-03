@@ -103,10 +103,21 @@ struct FrozenDopedSystem
 end
 
 
+#=
+    loc: [1, 3, 4, 6, 10, ...]
+    convertmatrix: (1, 1) -> 1, (3, 2) -> 1, (4, 3) -> 1, (6, 4) -> 1, ...
+    
+    densityhamiltonians: [(i,j) -> 1, ...]
+
+    =>
+    densityenergies
+
+=#
 function freezelocation(ds ::DopedSystem, loc::Vector{Int})
     n_ptl = length(loc)
     convertmatrix = sparse(loc, 1:n_ptl, ones(n_ptl), length(ds), n_ptl)
-    densityenergies = Int[sum(h) for h in ds.densityhamiltonians]
+    #densityenergies = Int[sum(h) for h in ds.densityhamiltonians]
+    densityenergies = [sum(transpose(convertmatrix) * h * convertmatrix) for h in ds.densityhamiltonians]
     spinhamiltonians = [transpose(convertmatrix) * h * convertmatrix for h in ds.spinhamiltonians]
     return FrozenDopedSystem(ds.size, densityenergies, spinhamiltonians)
 end
@@ -324,6 +335,7 @@ function main()
         let
             p = OrderedDict(tp...)
             p["locations"] = bestloc
+            p["best_update"] = last_update
             push!(output_data, p)
 
             open(args["out"], "w") do file
