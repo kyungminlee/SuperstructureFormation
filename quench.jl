@@ -1,9 +1,12 @@
-using IterTools
+#using IterTools
+using Random
+using SparseArrays
 using Combinatorics
 using Optim
 using JSON
 using ArgParse
 using DataStructures
+using LinearAlgebra
 
 densitybondtypes = [
     [(1,0), (0,1), (-1,1)]
@@ -47,7 +50,8 @@ length(ds::DopedSystem) = prod(ds.size)
 size(ds::DopedSystem) = ds.size
 
 function dopedsystem(n1 ::Integer, n2 ::Integer, nparticle ::Integer)
-    s2i(i1 ::Integer, i2 ::Integer) = sub2ind((n1,n2), i1, i2)
+    #s2i(i1 ::Integer, i2 ::Integer) = sub2ind((n1,n2), i1, i2)
+    s2i(i1 ::Integer, i2 ::Integer) = (LinearIndices((n1,n2)))[i1, i2]
     i2s(i ::Integer) = ind2sub((n1, n2), i)
 
     densityhamiltonians = SparseMatrixCSC{Int, Int}[]
@@ -162,7 +166,7 @@ function minimumenergy(ds ::DopedSystem, V::Vector{<:Real}, J::Vector{<:Real}, l
     mine = Inf
     n_ptl = length(loc)
     fds = freezelocation(ds, loc)
-    for i in product(Iterators.repeated([-1,1], n_ptl-1)...)
+    for i in Iterators.product(Iterators.repeated([-1,1], n_ptl-1)...)
         spins = [1, i...]
         evec = [dot(spins, h * spins) for h in fds.spinhamiltonians]
         energy = dot(J, evec)
@@ -186,7 +190,7 @@ function minimumenergy(ds ::DopedSystem, V ::Vector{<:Real}, J::Vector{<:Real}, 
     loc = sort(collect(occemp.occupied))
     fds = freezelocation(ds, loc)
 
-    for i in product(Iterators.repeated([-1,1], n_ptl-1)...)
+    for i in Iterators.product(Iterators.repeated([-1,1], n_ptl-1)...)
         spins = [1, i...]
         evec = [dot(spins, h * spins) for h in fds.spinhamiltonians]
         energy = dot(J, evec)
@@ -247,7 +251,8 @@ function main()
     ds = dopedsystem(n1, n2, nptl)
 
     function localupdate!(x_proposal ::Vector{Bool}, x ::Vector{Bool})
-        copy!(x_proposal, x)
+        #copy!(x_proposal, x)
+        copyto!(x_proposal, x)
         o = rand([i for (i, y) in enumerate(x) if y])
         e = rand([i for (i, y) in enumerate(x) if !y])
         x_proposal[o] = false
@@ -255,10 +260,13 @@ function main()
     end
 
     function globalupdate!(x_proposal ::Vector{Bool}, x ::Vector{Bool})
-        copy!(x_proposal, x)
+        #copy!(x_proposal, x)
+        copyto!(x_proposal, x)
         sel = randperm(nsite)
-        x_proposal[:] = false
-        x_proposal[sel[1:nptl]] = true
+        #x_proposal[:] = false
+        #x_proposal[sel[1:nptl]] = true
+        x_proposal[:] .= false
+        x_proposal[sel[1:nptl]] .= true
     end
 
     output_data = []
@@ -274,15 +282,16 @@ function main()
         best = zeros(Bool, nsite)
         next = zeros(Bool, nsite)
 
-        srand(parameters["seed"])
+        Random.seed!(parameters["seed"])
         let
             sel = randperm(nsite)
-            current[sel[1:nptl]] = true
+            current[sel[1:nptl]] .= true
         end
 
         f_current = f(current)
         f_best = f_current
-        copy!(best, current)
+        #copy!(best, current)
+        copyto!(best, current)
 
         last_update = 0
         sweepiter = 0
@@ -305,19 +314,22 @@ function main()
                 f_next = f(next)
                 if f_next < f_current
                     f_current = f_next
-                    copy!(current, next)
+                    #copy!(current, next)
+                    copyto!(current, next)
                 else
                     prob = exp(- β * (f_next - f_current))
                     if rand() < prob
                         f_current = f_next
-                        copy!(current, next)
+                        #copy!(current, next)
+                        copyto!(current, next)
                     end
                 end
 
                 if f_current < f_best
                     last_update = sweepiter
                     f_best = f_current
-                    copy!(best, current)
+                    #copy!(best, current)
+                    copyto!(best, current)
                 end
 
                 if printevery > 0 && sweepiter % printevery == 0
